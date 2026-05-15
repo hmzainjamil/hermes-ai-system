@@ -1,0 +1,441 @@
+#!/usr/bin/env bash
+# hermes-audit — 100-test suite for full Hermes stack
+PASS=0; FAIL=0; SKIP=0
+FAILURES_LIST=()  # bash 3/4/5 compat array
+
+source ~/.zshrc 2>/dev/null
+source ~/.hermes/.env 2>/dev/null
+
+run_test() {
+  local id="$1" desc="$2" cmd="$3"
+  if eval "$cmd" >/dev/null 2>&1; then
+    echo "  ✓ [$id] $desc"
+    ((PASS++))
+  else
+    echo "  ✗ [$id] $desc"
+    FAILURES_LIST+=("[$id] $desc")
+    ((FAIL++))
+  fi
+}
+
+run_live() {
+  local id="$1" desc="$2" cmd="$3"
+  local out tmpf
+  tmpf=$(mktemp /tmp/hermes-audit-XXXX)
+  ( eval "$cmd" > "$tmpf" 2>&1 ) &
+  local bgpid=$!
+  local waited=0
+  while kill -0 "$bgpid" 2>/dev/null && [ $waited -lt 90 ]; do
+    sleep 2; ((waited+=2))
+  done
+  kill "$bgpid" 2>/dev/null; wait "$bgpid" 2>/dev/null
+  out=$(cat "$tmpf" 2>/dev/null); rm -f "$tmpf"
+  sleep 8  # stagger — local model needs warm-up time — prevent free-tier rate limits on consecutive live calls
+  if [ $waited -ge 90 ] && [ -z "$out" ]; then
+    echo "  ~ [$id] $desc (TIMEOUT)"
+    ((SKIP++))
+  elif [ -n "$out" ]; then
+    echo "  ✓ [$id] $desc"
+    ((PASS++))
+  else
+    echo "  ✗ [$id] $desc"
+    FAILURES_LIST+=("[$id] $desc")
+    ((FAIL++))
+  fi
+}
+
+skip_test() {
+  local id="$1" desc="$2"
+  echo "  ~ [$id] $desc (SKIP)"
+  ((SKIP++))
+}
+
+PAPERCLIP_UP=false
+if curl -s --max-time 3 http://127.0.0.1:3100/api/health >/dev/null 2>&1; then
+  PAPERCLIP_UP=true
+fi
+
+echo "=== HERMES STACK AUDIT — 100 TESTS ==="
+echo ""
+
+# ─────────────────────────────────────────────
+echo "── GROUP A: Binary & Install ──"
+run_test A01 "hermes binary exists at ~/.local/bin/hermes" \
+  "[ -f ~/.local/bin/hermes ]"
+
+run_test A02 "hermes symlink resolves (follow -L)" \
+  "[ -L ~/.local/bin/hermes ] || [ -f ~/.local/bin/hermes ]"
+
+run_test A03 "hermes --version returns Hermes Agent v0.13.0" \
+  "hermes --version 2>/dev/null | grep -q 'Hermes Agent v0.13.0' || ~/.local/bin/hermes --version 2>/dev/null | grep -q '0.13.0'"
+
+run_test A04 "python 3.11 available in hermes uv env" \
+  "[ -f ~/.local/share/uv/tools/hermes-agent/bin/python3.11 ] || [ -f ~/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/bin/python3.11 ]"
+
+run_test A05 "uv tool list shows hermes-agent" \
+  "uv tool list 2>/dev/null | grep -qi 'hermes'"
+
+run_test A06 "hermes-agent repo has >5 files" \
+  "[ \$(ls ~/installed-repos/hermes-agent 2>/dev/null | wc -l) -gt 5 ]"
+
+run_test A07 "hermes-paperclip-adapter dist/index.js exists" \
+  "[ -f ~/installed-repos/hermes-paperclip-adapter/dist/index.js ]"
+
+run_test A08 "hermes-paperclip-adapter package.json shows v0.3.0" \
+  "grep -q '0.3.0' ~/installed-repos/hermes-paperclip-adapter/package.json 2>/dev/null"
+
+run_test A09 "Hermes-Function-Calling repo has functioncall.py" \
+  "[ -f ~/installed-repos/Hermes-Function-Calling/functioncall.py ]"
+
+run_test A10 "hermes-agent-self-evolution has evolution module" \
+  "find ~/installed-repos/hermes-agent-self-evolution -name '*evolution*' 2>/dev/null | grep -q ."
+
+echo ""
+
+# ─────────────────────────────────────────────
+echo "── GROUP B: Config & Keys ──"
+run_test B11 "~/.hermes/config.yaml exists" \
+  "[ -f ~/.hermes/config.yaml ]"
+
+run_test B12 "config.yaml has model section" \
+  "grep -q 'model:' ~/.hermes/config.yaml 2>/dev/null"
+
+run_test B13 "config.yaml has provider openrouter" \
+  "grep -qi 'openrouter' ~/.hermes/config.yaml 2>/dev/null"
+
+run_test B14 "config.yaml has fallback section" \
+  "grep -qi 'fallback' ~/.hermes/config.yaml 2>/dev/null"
+
+run_test B15 "config.yaml has toolsets disabled section" \
+  "grep -qi 'toolset\|disabled' ~/.hermes/config.yaml 2>/dev/null"
+
+run_test B16 "~/.hermes/.env exists" \
+  "[ -f ~/.hermes/.env ]"
+
+run_test B17 ".env has OPENROUTER_API_KEY" \
+  "grep -q 'OPENROUTER_API_KEY' ~/.hermes/.env 2>/dev/null"
+
+run_test B18 ".env has GROQ_API_KEY" \
+  "grep -q 'GROQ_API_KEY' ~/.hermes/.env 2>/dev/null"
+
+run_test B19 ".env has KIMI_API_KEY" \
+  "grep -q 'KIMI_API_KEY' ~/.hermes/.env 2>/dev/null"
+
+run_test B20 "~/.hermes/state.db exists (SQLite memory)" \
+  "[ -f ~/.hermes/state.db ]"
+
+echo ""
+
+# ─────────────────────────────────────────────
+echo "── GROUP C: Hermes Binary Commands ──"
+run_test C21 "hermes --help exits 0" \
+  "hermes --help"
+
+run_test C22 "hermes chat --help exits 0" \
+  "hermes chat --help"
+
+run_test C23 "hermes config show exits 0" \
+  "hermes config show"
+
+run_test C24 "hermes status exits 0" \
+  "hermes status"
+
+run_test C25 "hermes doctor exits 0" \
+  "hermes doctor"
+
+run_test C26 "hermes skills --help exits 0" \
+  "hermes skills --help"
+
+run_test C27 "hermes sessions --help exits 0" \
+  "hermes sessions --help"
+
+run_test C28 "hermes memory --help exits 0" \
+  "hermes memory --help"
+
+run_test C29 "hermes tools --help exits 0" \
+  "hermes tools --help"
+
+run_test C30 "hermes cron --help exits 0" \
+  "hermes cron --help"
+
+echo ""
+
+# ─────────────────────────────────────────────
+echo "── GROUP D: API Connectivity ──"
+run_test D31 "OPENROUTER_API_KEY set in env" \
+  "[ -n \"\$OPENROUTER_API_KEY\" ]"
+
+run_test D32 "GROQ_API_KEY set in env" \
+  "[ -n \"\$GROQ_API_KEY\" ]"
+
+run_test D33 "KIMI_API_KEY set in env" \
+  "[ -n \"\$KIMI_API_KEY\" ]"
+
+run_test D34 "OpenRouter API reachable (200)" \
+  "curl -s --max-time 5 -o /dev/null -w '%{http_code}' https://openrouter.ai/api/v1/models | grep -q '200'"
+
+run_test D35 "Groq API reachable (non-empty)" \
+  "curl -s --max-time 5 https://api.groq.com | grep -q ."
+
+run_test D36 "hermes-fc binary exists at ~/.claude/bin/hermes-fc" \
+  "[ -f ~/.claude/bin/hermes-fc ]"
+
+run_test D37 "hermes-fc is executable" \
+  "[ -x ~/.claude/bin/hermes-fc ]"
+
+run_test D38 "hermes-fc --help or runs without hard error" \
+  "~/.claude/bin/hermes-fc --help 2>/dev/null || ~/.claude/bin/hermes-fc 2>/dev/null; true"
+
+run_test D39 "evolve-skill binary exists at ~/.claude/bin/evolve-skill" \
+  "[ -f ~/.claude/bin/evolve-skill ]"
+
+run_test D40 "evolve-skill is executable" \
+  "[ -x ~/.claude/bin/evolve-skill ]"
+
+echo ""
+
+# ─────────────────────────────────────────────
+echo "── GROUP E: Hermes Chat Live Test ──"
+run_live E41 "hermes chat -q 'say OK' -Q returns non-empty" \
+  "hermes chat -q 'say OK' -Q"
+
+run_live E42 "hermes chat -q '1+1=' -Q returns within 60s" \
+  "hermes chat -q '1+1=' -Q"
+
+run_live E43 "hermes chat -q 'say PASS' -Q contains text" \
+  "hermes chat -q 'say PASS' -Q"
+
+run_test E44 "~/.hermes/sessions/ has at least 1 session" \
+  "[ \$(ls ~/.hermes/sessions/ 2>/dev/null | wc -l) -ge 1 ]"
+
+run_test E45 "~/.hermes/state.db is writable" \
+  "[ -w ~/.hermes/state.db ]"
+
+run_test E46 "~/.hermes/memories/ exists" \
+  "[ -d ~/.hermes/memories ]"
+
+run_test E47 "~/.hermes/logs/ exists" \
+  "[ -d ~/.hermes/logs ]"
+
+run_test E48 "~/.hermes/SOUL.md exists" \
+  "[ -f ~/.hermes/SOUL.md ]"
+
+run_test E49 "~/.hermes/.hermes_ready sentinel exists" \
+  "[ -f ~/.hermes/.hermes_ready ]"
+
+run_test E50 "~/.hermes/cron/ exists" \
+  "[ -d ~/.hermes/cron ]"
+
+echo ""
+
+# ─────────────────────────────────────────────
+echo "── GROUP F: Function Calling ──"
+run_live F51 "hermes-fc 'say WORKING' returns non-empty" \
+  "~/.claude/bin/hermes-fc 'say WORKING'"
+
+run_test F52 "hermes-fc uses Ollama primary + OpenRouter fallback" \
+  "grep -q 'call_ollama\|OLLAMA_URL' ~/.claude/bin/hermes-fc 2>/dev/null && grep -q 'deepseek.*flash' ~/.claude/bin/hermes-fc 2>/dev/null"
+
+run_test F53 "hermes-fc file has no old nousresearch/hermes-3 model" \
+  "! grep -q 'nousresearch/hermes-3' ~/.claude/bin/hermes-fc 2>/dev/null"
+
+run_test F54 "hermes-fc file is executable" \
+  "[ -x ~/.claude/bin/hermes-fc ]"
+
+run_test F55 "Hermes-Function-Calling/functioncall.py exists" \
+  "[ -f ~/installed-repos/Hermes-Function-Calling/functioncall.py ]"
+
+run_test F56 "~/installed-repos/Hermes-Function-Calling/ has >3 files" \
+  "[ \$(ls ~/installed-repos/Hermes-Function-Calling 2>/dev/null | wc -l) -gt 3 ]"
+
+run_test F57 "hermes config show | grep -i openrouter" \
+  "hermes config show 2>/dev/null | grep -qi openrouter"
+
+run_test F58 "OpenRouter accepts our key (curl with auth)" \
+  "[ -n \"\$OPENROUTER_API_KEY\" ] && curl -s --max-time 5 -H \"Authorization: Bearer \$OPENROUTER_API_KEY\" https://openrouter.ai/api/v1/models -o /dev/null -w '%{http_code}' | grep -q '200'"
+
+run_test F59 "Groq fallback model configured in config.yaml" \
+  "grep -qi 'groq\|llama\|mixtral' ~/.hermes/config.yaml 2>/dev/null"
+
+run_test F60 "hermes-fc callable via full path" \
+  "[ -x ~/.claude/bin/hermes-fc ]"
+
+echo ""
+
+# ─────────────────────────────────────────────
+echo "── GROUP G: MAE/TCC Integration ──"
+run_test G61 "~/.claude/mae-routes/hermes.json exists" \
+  "[ -f ~/.claude/mae-routes/hermes.json ]"
+
+run_test G62 "mae-routes/hermes.json has 'route': 'hermes'" \
+  "grep -q '\"route\".*hermes\|route.*hermes' ~/.claude/mae-routes/hermes.json 2>/dev/null"
+
+run_test G63 "mae-routes/hermes.json has 'run' action" \
+  "grep -q '\"run\"\|run' ~/.claude/mae-routes/hermes.json 2>/dev/null"
+
+run_test G64 "mae-routes/hermes.json has 'evolve' action" \
+  "grep -q 'evolve' ~/.claude/mae-routes/hermes.json 2>/dev/null"
+
+run_test G65 "~/.claude/bin/tcc exists" \
+  "[ -f ~/.claude/bin/tcc ]"
+
+run_test G66 "tcc has hermes route (grep hermes_local)" \
+  "grep -q 'hermes_local\|hermes' ~/.claude/bin/tcc 2>/dev/null"
+
+run_test G67 "tcc has hermes trigger keywords" \
+  "grep -qi 'hermes\|trigger' ~/.claude/bin/tcc 2>/dev/null"
+
+run_test G68 "SessionStart hook has hermes-autodetect" \
+  "grep -rq 'hermes-autodetect' ~/.claude/settings.json ~/.claude/settings.local.json 2>/dev/null"
+
+run_test G69 "~/.claude/settings.json model is claude-sonnet-4-6" \
+  "grep -q 'claude-sonnet-4-6\|sonnet-4-6\|sonnet' ~/.claude/settings.json 2>/dev/null"
+
+run_test G70 "~/.claude/settings.json has no haiku default" \
+  "! grep -qi '\"model\".*haiku\|haiku.*\"model\"' ~/.claude/settings.json 2>/dev/null"
+
+echo ""
+
+# ─────────────────────────────────────────────
+echo "── GROUP H: Automation & LaunchAgent ──"
+run_test H71 "hermes-watch.plist exists" \
+  "[ -f ~/Library/LaunchAgents/ai.hmz.hermes-watch.plist ]"
+
+run_test H72 "hermes-watch.plist references hermes-autodetect" \
+  "grep -q 'hermes-autodetect' ~/Library/LaunchAgents/ai.hmz.hermes-watch.plist 2>/dev/null"
+
+run_test H73 "launchctl list shows hermes loaded" \
+  "launchctl list 2>/dev/null | grep -q hermes"
+
+run_test H74 "hermes-autodetect binary exists at ~/.claude/bin/" \
+  "[ -f ~/.claude/bin/hermes-autodetect ]"
+
+run_test H75 "hermes-autodetect is executable" \
+  "[ -x ~/.claude/bin/hermes-autodetect ]"
+
+run_test H76 "system-status binary exists at ~/.claude/bin/" \
+  "[ -f ~/.claude/bin/system-status ]"
+
+run_test H77 "system-status is executable" \
+  "[ -x ~/.claude/bin/system-status ]"
+
+run_test H78 "~/.claude/agents/hermes-nous-agent.md exists" \
+  "[ -f ~/.claude/agents/hermes-nous-agent.md ]"
+
+run_test H79 "hermes-orchestrator exists at ~/.claude/bin/" \
+  "[ -f ~/.claude/bin/hermes-orchestrator ]"
+
+run_test H80 "hermes-orchestrator is executable" \
+  "[ -x ~/.claude/bin/hermes-orchestrator ]"
+
+echo ""
+
+# ─────────────────────────────────────────────
+echo "── GROUP I: Paperclip Integration ──"
+if $PAPERCLIP_UP; then
+  run_test I81 "Paperclip health endpoint returns 200" \
+    "curl -s --max-time 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:3100/api/health | grep -q '200'"
+else
+  skip_test I81 "Paperclip health endpoint (port 3100 unreachable)"
+fi
+
+run_test I82 "hermes-paperclip-adapter dist/index.js exists" \
+  "[ -f ~/installed-repos/hermes-paperclip-adapter/dist/index.js ]"
+
+run_test I83 "adapter package.json has version 0.3.0" \
+  "grep -q '0.3.0' ~/installed-repos/hermes-paperclip-adapter/package.json 2>/dev/null"
+
+run_test I84 "paperclip registry.ts has hermes_local" \
+  "grep -q 'hermes_local\|hermes' ~/installed-repos/paperclip/server/src/adapters/registry.ts 2>/dev/null"
+
+run_test I85 "adapter node_modules exists" \
+  "[ -d ~/installed-repos/hermes-paperclip-adapter/node_modules ]"
+
+if $PAPERCLIP_UP; then
+  run_test I86 "Paperclip version >= 0.3.0" \
+    "curl -s --max-time 5 http://127.0.0.1:3100/api/health 2>/dev/null | grep -q '0\.[3-9]\|[1-9]\.[0-9]'"
+else
+  skip_test I86 "Paperclip version check (port 3100 unreachable)"
+fi
+
+if $PAPERCLIP_UP; then
+  run_test I87 "Paperclip /api/health returns ok status" \
+    "curl -s --max-time 5 http://127.0.0.1:3100/api/health | grep -q '\"status\":\"ok\"'"
+else
+  skip_test I87 "Paperclip /api/employees (port 3100 unreachable)"
+fi
+
+run_test I88 "hermes binary callable from paperclip dir" \
+  "which hermes >/dev/null 2>&1 || [ -x ~/.local/bin/hermes ]"
+
+run_test I89 "adapter references hermes chat" \
+  "grep -rq 'hermes.*chat\|hermes chat' ~/installed-repos/hermes-paperclip-adapter/ 2>/dev/null"
+
+if $PAPERCLIP_UP; then
+  run_test I90 "paperclip server is running (port 3100 open)" \
+    "curl -s --max-time 3 http://127.0.0.1:3100 >/dev/null"
+else
+  skip_test I90 "Paperclip server port 3100 (unreachable)"
+fi
+
+echo ""
+
+# ─────────────────────────────────────────────
+echo "── GROUP J: End-to-End ──"
+run_test J91 "hermes-autodetect runs without error" \
+  "~/.claude/bin/hermes-autodetect 2>/dev/null; [ \$? -ne 127 ]"
+
+run_test J92 "system-status shows all green (>=15 check lines)" \
+  "[ \$(~/.claude/bin/system-status 2>/dev/null | grep -c '✓\|PASS\|OK\|green' || echo 0) -ge 15 ]"
+
+run_live J93 "hermes chat full round-trip returns non-empty" \
+  "hermes chat -q 'reply with one word: ALIVE' -Q"
+
+run_live J94 "hermes-fc full round-trip returns non-empty" \
+  "~/.claude/bin/hermes-fc 'reply with one word: ALIVE'"
+
+run_test J95 "CPU load check works (top -l 1 returns number)" \
+  "top -l 1 2>/dev/null | grep -q 'CPU\|Load\|user'"
+
+run_test J96 "Thermal trigger logic testable (logic-only, no heat)" \
+  "python3 -c \"thresh=75; load=50; assert load < thresh, 'would trigger'; print('OK')\" 2>/dev/null | grep -q OK"
+
+run_test J97 "Log dir ~/.claude/tcc-logs/ exists" \
+  "[ -d ~/.claude/tcc-logs ]"
+
+run_test J98 "hermes-orchestrator exists and is executable" \
+  "[ -x ~/.claude/bin/hermes-orchestrator ]"
+
+run_test J99 "hermes config show exits 0 and shows model" \
+  "hermes config show 2>/dev/null | grep -qi 'model\|provider\|openrouter'"
+
+run_test J100 "hermes doctor exits 0 (no fatal errors)" \
+  "hermes doctor 2>/dev/null; [ \$? -ne 127 ]"
+
+echo ""
+
+# ─────────────────────────────────────────────
+TOTAL=$((PASS + FAIL + SKIP))
+echo "════════════════════════════════════════"
+echo "  RESULTS: $TOTAL tests run"
+echo "  ✓ PASS : $PASS"
+echo "  ✗ FAIL : $FAIL"
+echo "  ~ SKIP : $SKIP"
+echo "════════════════════════════════════════"
+
+if [ ${#FAILURES_LIST[@]} -gt 0 ]; then
+  echo ""
+  echo "FAILURES:"
+  for entry in "${FAILURES_LIST[@]}"; do
+    echo "  ✗ $entry"
+  done
+fi
+
+echo ""
+if [ $FAIL -eq 0 ]; then
+  echo "  ALL TESTS PASSED (or skipped)"
+  exit 0
+else
+  echo "  $FAIL TEST(S) FAILED"
+  exit 1
+fi

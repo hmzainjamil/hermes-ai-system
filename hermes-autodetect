@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# hermes-autodetect — runs on SessionStart, auto-wires hermes if found
+# Added to SessionStart hook. Runs silently, never blocks.
+
+AGENT_FILE="$HOME/.claude/agents/hermes-nous-agent.md"
+STATUS_FILE="$HOME/.hermes/.hermes_ready"
+
+check_hermes() {
+  # Check multiple locations hermes installer might use
+  for bin in \
+    "$HOME/.hermes/bin/hermes" \
+    "$HOME/.local/bin/hermes" \
+    "$(which hermes 2>/dev/null)"; do
+    [ -x "$bin" ] && echo "$bin" && return 0
+  done
+  # Check uv-managed venv
+  local venv_bin
+  venv_bin=$(find "$HOME/.hermes" -name "hermes" -type f 2>/dev/null | head -1)
+  [ -n "$venv_bin" ] && echo "$venv_bin" && return 0
+  return 1
+}
+
+HERMES_BIN=$(check_hermes)
+
+if [ -n "$HERMES_BIN" ]; then
+  # Get version
+  HERMES_VER=$("$HERMES_BIN" --version 2>/dev/null | head -1 || echo "unknown")
+  touch "$STATUS_FILE"
+
+  # Auto-configure ~/.hermes/config.yaml if not set
+  CONFIG="$HOME/.hermes/config.yaml"
+  if [ ! -f "$CONFIG" ]; then
+    mkdir -p "$HOME/.hermes"
+    cat > "$CONFIG" << YAML
+# Auto-configured by hermes-autodetect
+model: openrouter/nousresearch/hermes-3-llama-3.1-405b:free
+provider: openrouter
+YAML
+  fi
+
+  # Update agent file with real binary path
+  sed -i '' "s|hermes CLI: NOT FOUND|hermes: $HERMES_BIN ($HERMES_VER)|g" "$AGENT_FILE" 2>/dev/null
+
+  # Add PATH to .zshrc if not present
+  HERMES_DIR=$(dirname "$HERMES_BIN")
+  if ! grep -q "$HERMES_DIR" "$HOME/.zshrc" 2>/dev/null; then
+    echo "export PATH=\"$HERMES_DIR:\$PATH\"" >> "$HOME/.zshrc"
+  fi
+else
+  rm -f "$STATUS_FILE"
+fi

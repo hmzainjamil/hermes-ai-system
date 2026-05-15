@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# hermes-deactivate — gracefully stop any running hermes processes
+
+READY_SENTINEL="$HOME/.hermes/.hermes_ready"
+
+# 1. Kill hermes chat processes
+pkill -f "hermes chat" 2>/dev/null || true
+
+# 2. Kill orphaned hermes agent sessions
+pkill -f "hermes-agent" 2>/dev/null || true
+
+# 3. Remove sentinel
+rm -f "$READY_SENTINEL"
+
+# 4. Confirm
+echo "[HERMES] DEACTIVATED"
+
+exit 0

@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""
+hermes-fc — Hermes function calling: Ollama (local) → OpenRouter → Groq
+Primary: Ollama llama3 at localhost:11434 (zero cost, no rate limits)
+Fallback: deepseek/deepseek-v4-flash:free via OpenRouter
+Usage: hermes-fc "your query"
+       hermes-fc --json "describe a company object"
+       hermes-fc --remote "force OpenRouter"
+"""
+import sys, os, json, argparse
+import urllib.request, urllib.error
+
+OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+GROQ_KEY = os.environ.get("GROQ_API_KEY", "")
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/v1")
+OLLAMA_MODEL = "qwen2.5:7b"
+REMOTE_MODEL = "deepseek/deepseek-v4-flash:free"
+
+def _post(url: str, payload: dict, headers: dict, timeout: int = 45) -> dict:
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", **headers}
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+def call_ollama(query: str, json_mode: bool = False) -> str:
+    system = (
+        "You are a function calling AI. Respond in JSON when asked." if json_mode
+        else "You are Hermes, a helpful AI assistant."
+    )
+    data = _post(f"{OLLAMA_URL}/chat/completions", {
+        "model": OLLAMA_MODEL,
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": query}],
+        "temperature": 0.1, "max_tokens": 2048
+    }, {"Authorization": "Bearer ollama"}, timeout=45)
+    return data["choices"][0]["message"]["content"]
+
+def call_openrouter(query: str, model: str = REMOTE_MODEL, json_mode: bool = False) -> str:
+    if not OPENROUTER_KEY:
+        raise RuntimeError("OPENROUTER_API_KEY not set")
+    system = (
+        "You are a function calling AI. Respond in JSON when asked." if json_mode
+        else "You are Hermes, a helpful AI assistant by Nous Research."
+    )
+    data = _post("https://openrouter.ai/api/v1/chat/completions", {
+        "model": model,
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": query}],
+        "temperature": 0.1, "max_tokens": 2048
+    }, {"Authorization": f"Bearer {OPENROUTER_KEY}",
+        "HTTP-Referer": "https://hmz.agency", "X-Title": "HMZ Hermes FC"})
+    return data["choices"][0]["message"]["content"]
+
+def call_hermes(query: str, model: str = None, json_mode: bool = False, force_remote: bool = False) -> str:
+    if not force_remote:
+        try:
+            return call_ollama(query, json_mode)
+        except Exception as e:
+            sys.stderr.write(f"[Ollama unavailable: {e}] → falling back to OpenRouter\n")
+    return call_openrouter(query, model or REMOTE_MODEL, json_mode)
+
+if __name__ == "__main__":
+    p = argparse.ArgumentParser()
+    p.add_argument("query", nargs="?", default="")
+    p.add_argument("--json", action="store_true", dest="json_mode")
+    p.add_argument("--model", default=None)
+    p.add_argument("--remote", action="store_true", dest="force_remote")
+    args = p.parse_args()
+    query = args.query or (sys.stdin.read() if not sys.stdin.isatty() else "")
+    if not query:
+        print("Usage: hermes-fc 'your query'")
+        sys.exit(1)
+    print(call_hermes(query, args.model, args.json_mode, args.force_remote))

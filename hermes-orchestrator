@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# hermes-orchestrator — vertical/horizontal agent hierarchy engine
+set -euo pipefail
+
+HERMES=~/.local/bin/hermes
+LOG_DIR=~/.claude/tcc-logs
+mkdir -p "$LOG_DIR"
+
+TASK=""
+MODE="auto"
+PRIORITY="normal"
+LOGFILE="$LOG_DIR/hermes-orch-$(date +%Y%m%d_%H%M%S).log"
+
+# --- arg parse ---
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --mode) MODE="$2"; shift 2 ;;
+    --priority) PRIORITY="$2"; shift 2 ;;
+    --) shift; TASK="$*"; break ;;
+    -*) echo "Unknown flag: $1" >&2; exit 1 ;;
+    *) TASK="${TASK:+$TASK }$1"; shift ;;
+  esac
+done
+
+if [[ -z "$TASK" ]]; then
+  echo "Usage: hermes-orchestrator <task> [--mode vertical|horizontal|auto] [--priority high|normal|low]" >&2
+  exit 1
+fi
+
+log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOGFILE"; }
+
+# --- thermal guard (inline, no MFC) ---
+cpu_load=$(top -l 1 -s 0 2>/dev/null | awk '/CPU usage/{gsub(/%/,""); print $3}')
+if [ "${cpu_load%.*}" -ge 75 ] 2>/dev/null; then
+  echo "[THERMAL] CPU ${cpu_load}% — queuing with 10s delay" >&2
+  sleep 10
+fi
+
+# priority delay
+case "$PRIORITY" in
+  low)    sleep 5 ;;
+  normal) ;;
+  high)   ;;
+esac
+
+log "TASK: $TASK"
+log "MODE: $MODE | PRIORITY: $PRIORITY"
+
+# --- auto-detect mode ---
+if [[ "$MODE" == "auto" ]]; then
+  if echo "$TASK" | grep -qiE "decompose|break.?down|subtask|plan|steps|split|outline"; then
+    MODE="vertical"
+  elif echo "$TASK" | grep -qiE "ads|seo|geo|email|code|bug|fix|script|html|css|js|python"; then
+    MODE="horizontal"
+  else
+    MODE="vertical"
+  fi
+  log "AUTO-DETECT → mode=$MODE"
+fi
+
+hermes_exec() {
+  local t="$1"
+  log "HERMES EXEC: $t"
+  timeout 90 "$HERMES" chat -q "$t" -Q 2>>"$LOGFILE" || {
+    log "ERROR: hermes failed or timed out for: $t"
+    return 1
+  }
+}
+
+# --- VERTICAL: MAE decompose → hermes execute subtasks ---
+vertical_run() {
+  log "VERTICAL PIPELINE START"
+  local decomp
+  decomp=$(timeout 90 "$HERMES" chat -q "decompose this into 3 subtasks (return as numbered list, one per line, no intro text): $TASK" -Q 2>>"$LOGFILE") || {
+    log "DECOMPOSE FAILED — falling back to direct exec"
+    hermes_exec "$TASK"
+    return $?
+  }
+  log "SUBTASKS:\n$decomp"
+
+  local result=""
+  local idx=0
+  while IFS= read -r line; do
+    [[ -z "${line// }" ]] && continue
+    # strip leading numbering
+    local subtask
+    subtask=$(echo "$line" | sed 's/^[0-9]*[.)[:space:]]*//')
+    [[ -z "$subtask" ]] && continue
+    idx=$((idx+1))
+    log "SUBTASK $idx: $subtask"
+    local sub_result
+    sub_result=$(hermes_exec "$subtask") || { log "SUBTASK $idx FAILED"; continue; }
+    result="${result}--- Subtask $idx ---\n${sub_result}\n"
+    echo "$sub_result"
+  done <<< "$decomp"
+
+  echo -e "$result" >> "$LOGFILE"
+}
+
+# --- HORIZONTAL: peer routing by keyword ---
+horizontal_run() {
+  log "HORIZONTAL ROUTING"
+
+  # launch-optimized full stack → bridge
+  if echo "$TASK" | grep -qiE "launch.?optimized|full.?audit|360.?audit|bdm.?sweep|agency.?task|hmz"; then
+    log "PEER ROUTE → launch-hermes-bridge (full stack)"
+    ~/.claude/bin/launch-hermes-bridge "$TASK" --mode vertical 2>>"$LOGFILE" | tee -a "$LOGFILE" && return 0
+  fi
+
+  # ads + paid media
+  if echo "$TASK" | grep -qiE "\bads\b|ppc|meta|google.?ads|campaign|roas|cpc|ctr|media.?buy"; then
+    log "PEER ROUTE → TCC ads"
+    timeout 90 ~/.claude/bin/tcc route ads "$TASK" 2>>"$LOGFILE" | tee -a "$LOGFILE" && return 0
+  fi
+
+  # SEO/GEO
+  if echo "$TASK" | grep -qiE "\bseo\b|geo|rank|backlink|keyword|serp|schema|aeo|ai.?search"; then
+    log "PEER ROUTE → TCC seo"
+    timeout 90 ~/.claude/bin/tcc route seo "$TASK" 2>>"$LOGFILE" | tee -a "$LOGFILE" && return 0
+  fi
+
+  # email/outreach
+  if echo "$TASK" | grep -qiE "\bemail\b|sequence|outreach|cold.?mail|newsletter|drip|lead.?gen"; then
+    log "PEER ROUTE → TCC email"
+    timeout 90 ~/.claude/bin/tcc route email "$TASK" 2>>"$LOGFILE" | tee -a "$LOGFILE" && return 0
+  fi
+
+  # code/dev
+  if echo "$TASK" | grep -qiE "\bcode\b|bug|fix|script|function|python|bash|js|html|css|refactor|build|deploy"; then
+    log "PEER ROUTE → hermes (code)"
+    hermes_exec "$TASK" | tee -a "$LOGFILE"
+    return $?
+  fi
+
+  # report/doc
+  if echo "$TASK" | grep -qiE "report|audit|pdf|docx|xlsx|pptx|dashboard|analysis"; then
+    log "PEER ROUTE → MAE report pipeline"
+    python3 ~/.claude/bin/mae run "$TASK" 2>>"$LOGFILE" | tee -a "$LOGFILE" && return 0
+  fi
+
+  # fallback: direct hermes
+  log "PEER ROUTE → hermes (fallback)"
+  hermes_exec "$TASK" | tee -a "$LOGFILE"
+}
+
+# --- dispatch ---
+EXIT_CODE=0
+case "$MODE" in
+  vertical)   vertical_run   || EXIT_CODE=1 ;;
+  horizontal) horizontal_run || EXIT_CODE=1 ;;
+  *)
+    log "Unknown mode: $MODE" >&2
+    EXIT_CODE=1 ;;
+esac
+
+log "DONE — log: $LOGFILE"
+exit $EXIT_CODE

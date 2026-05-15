@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# hermes-activate — warm up hermes + confirm ready
+# Usage: hermes-activate [task]
+
+set -euo pipefail
+
+HERMES_DIR="$HOME/.hermes"
+READY_SENTINEL="$HERMES_DIR/.hermes_ready"
+OLLAMA_URL="http://localhost:11434"
+MODEL="qwen2.5:7b"
+
+mkdir -p "$HERMES_DIR"
+
+# 1. Check Ollama running
+if ! curl -sf "$OLLAMA_URL/api/tags" >/dev/null 2>&1; then
+    echo "[HERMES] ERROR: Ollama not running — start with: ollama serve" >&2
+    exit 1
+fi
+
+# 2. Check qwen2.5:7b loaded
+if ! ollama list 2>/dev/null | grep -q "qwen2.5"; then
+    echo "[HERMES] Pulling $MODEL..." >&2
+    ollama pull "$MODEL" >/dev/null 2>&1 || {
+        echo "[HERMES] ERROR: Failed to pull $MODEL" >&2
+        exit 1
+    }
+fi
+
+# 3. Keep-alive ping — extend Ollama model expiry to 10 min
+curl -sf "$OLLAMA_URL/api/chat" \
+  -d "{\"model\":\"$MODEL\",\"messages\":[],\"keep_alive\":\"10m\"}" \
+  >/dev/null 2>&1 || true
+
+# 4. Touch sentinel
+touch "$READY_SENTINEL"
+
+# 4. Run task if provided
+if [[ $# -gt 0 ]]; then
+    exec "$HOME/.local/bin/hermes" chat -q "$*" -Q
+fi
+
+# 5. Confirm ready
+echo "[HERMES] READY — qwen2.5:7b local"
