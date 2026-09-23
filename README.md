@@ -1,5 +1,9 @@
 # hermes-ai-system
 
+<!-- HMZ PORTFOLIO STANDARD -->
+> Portfolio status: active · Visibility: public · Source of truth: current repository source.
+<!-- END HMZ PORTFOLIO STANDARD -->
+
 > **Hermes AI System** — NousResearch Hermes full-featured agent: 30+ tools, persistent memory, 8 providers, 80+ skills, MCP support.
 
 <p align="center">
