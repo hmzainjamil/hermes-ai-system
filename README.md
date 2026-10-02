@@ -1,154 +1,39 @@
-# hermes-ai-system
+# Hermes Local Integration Scripts
 
-> **Hermes AI System** — NousResearch Hermes full-featured agent: 30+ tools, persistent memory, 8 providers, 80+ skills, MCP support.
+This repository contains shell and Python helpers that connect a local workstation to an externally installed Hermes CLI, Ollama, and optional services. It is not the Hermes Agent distribution and does not include the Hermes runtime.
 
-<p align="center"><a href="https://github.com/hmzainjamil/hermes-ai-system">Repository</a> · <a href="https://github.com/hmzainjamil/hermes-ai-system/commits/main">Commits</a> · <a href="https://github.com/hmzainjamil/hermes-ai-system/issues">Issues</a></p>
-<p align="center"><img alt="Documentation" src="https://img.shields.io/badge/documentation-deep%20editorial-lightgrey"> <img alt="Lifecycle" src="https://img.shields.io/badge/lifecycle-active-success"></p>
+## Repository map
 
-<!-- HMZ DEEP README v1 -->
-
-## At a glance
-
-| Field | Current state |
+| File | Role |
 |---|---|
-| Repository | hermes-ai-system |
-| Visibility | Public |
-| Lifecycle | Active |
-| Evidence basis | Current repository documentation and source-visible material |
+| `hermes-activate` | Checks a local Ollama endpoint and model, may pull `qwen2.5:7b`, sends a keep-alive request, writes a readiness sentinel, and optionally invokes the Hermes CLI with a task |
+| `hermes-deactivate` | Kills processes matching `hermes chat` and `hermes-agent`, then removes the readiness sentinel |
+| `hermes-autodetect` | Searches for a Hermes binary; when found, may create `~/.hermes/config.yaml`, edit `~/.zshrc`, update a Claude agent file, and create the readiness sentinel |
+| `hermes-fc` | Sends a prompt to a local Ollama-compatible endpoint; if that call fails, it attempts the configured OpenRouter model. `--remote` forces the remote path |
+| `hermes-orchestrator` | Logs a task, applies simple keyword routing, and invokes local Hermes, TCC, MAE, or bridge commands depending on matches |
+| `hermes-audit` | Runs workstation checks and live probes against local tools, files, services, and remote endpoints |
+| `README.md` | Scope, side effects, and review guidance |
 
-## Why this exists
+## Relationship to Hermes Agent
 
-**Hermes AI System** — NousResearch Hermes full-featured agent: 30+ tools, persistent memory, 8 providers, 80+ skills, MCP support.
+The scripts expect a separately installed `hermes` command. The upstream project is [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent). This repository is a local integration/helper collection, not an upstream fork or release. Its scripts also reference local Claude, MAE, TCC, and Paperclip paths that are not included here.
 
-This README focuses on the repository's documented scope and separates implementation claims from plans, external dependencies, and unsupported outcomes.
+## Data and operational effects
 
-## 🧠 CONCEPTS
+Review each script and its target paths before use.
 
-| Feature | Location | Description |
-|---|---|---|
-| CoreEngine | `core/engine.py` | Primary execution logic and orchestration layer |
-| ConfigManager | `config/manager.py` | Environment validation, hot-reload, API key checks |
-| ProviderAdapters | `adapters/` | Per-provider API wrappers with auth + retry logic |
-| TierRouter | `routing/tier0.py` | Ollama→DeepSeek→Gemini→Groq→GPT cost ladder |
-| OutputFormatter | `output/formatter.py` | Caveman-compressed, signal-dense output pipeline |
-| LogManager | `logs/manager.py` | Structured JSON logging to ~/.claude/tcc-logs/ |
-| HookHandler | `hooks/handler.py` | SessionStart/Stop integration for Claude Code |
-| RetryLogic | `core/retry.py` | Exponential backoff + alt-provider on persistent failure |
-| StatusTracker | `core/status.py` | Per-operation metrics: latency, cost, confidence scores |
-| Scheduler | `schedule/scheduler.py` | LaunchAgent-based cron scheduling for automation |
+- `hermes-activate` contacts Ollama at `localhost:11434`. It can download the configured model with `ollama pull`, sends a keep-alive request, creates `~/.hermes/.hermes_ready`, and passes any supplied task to the local Hermes CLI.
+- `hermes-autodetect` can modify files under the home directory, including `~/.hermes/config.yaml`, `~/.zshrc`, and `~/.claude/agents/hermes-nous-agent.md`.
+- `hermes-deactivate` uses broad `pkill -f` patterns. It can terminate matching Hermes chat or agent processes, then deletes the readiness sentinel.
+- `hermes-fc` sends prompts to the local Ollama-compatible API first. On failure, it sends the prompt to OpenRouter if the key is configured. The OpenRouter model and endpoint are specified in source. The script reads `GROQ_API_KEY` but does not use it.
+- `hermes-orchestrator` writes the supplied task text to timestamped logs under `~/.claude/tcc-logs`. Depending on keyword matches, it may pass that task to Hermes or invoke external local routing commands. Hermes may itself be configured to use a remote provider.
+- `hermes-audit` sources `~/.zshrc` and `~/.hermes/.env`, evaluates command strings, checks local paths and services, makes network requests, and issues live model prompts. Treat it as an active workstation probe, not a read-only or isolated unit-test suite. Do not run it before reviewing its commands and data exposure.
 
-## ⚙️ HOW IT WORKS
+## Validation and limitations
 
-```
-Input / Trigger (CLI command or hook event)
-    │
-    ▼
-ConfigManager: load .env, validate all provider API keys
-    │
-    ▼
-TierRouter: Ollama → DeepSeek → Gemini → Groq → GPT
-    │        (cost-ordered; local-first enforced always)
-    ▼
-CoreEngine: primary processing with selected provider adapter
-    │
-    ├── ProviderAdapter: API call with rate-limit handling
-    ├── RetryLogic: exponential backoff + alt provider on failure
-    ├── StatusTracker: record latency, cost, confidence score
-    │
-    ▼
-OutputFormatter: caveman-compress result to signal-dense format
-    │
-    ▼
-LogManager: persist full run record to ~/.claude/tcc-logs/
-    │
-    ▼
-stdout / file output / hook callback response
-```
+The files document the behavior above; they were not executed as part of this review. The audit script labels 100 checks, but its results depend on local state and external services, and it includes placeholder logic checks. No results are claimed here.
 
-## 🚀 INSTALL
-
-```bash
-git clone https://github.com/hmzainjamil/hermes-ai-system
-cd hermes-ai-system
-pip install -r requirements.txt
-cp .env.example .env
-# Fill in: GROQ_API_KEY, GEMINI_API_KEY, DEEPSEEK_API_KEY
-# Optional: OPENAI_API_KEY, ANTHROPIC_API_KEY (fallback only)
-python setup.py verify    # confirms all provider connections live
-python setup.py hooks     # installs Claude Code SessionStart/Stop hooks
-mkdir -p ~/.claude/tcc-logs/  # create log directory
-```
-
-## 📟 USAGE
-
-```bash
-# Primary usage — single command fires full pipeline
-python main.py "your goal or task description here"
-
-# Specify provider explicitly (skip auto-routing)
-python main.py --provider groq "summarize this document quickly"
-
-# Output to file (default: stdout)
-python main.py "task description" --output ~/Downloads/result.md
-
-# Dry run — show routing plan without making any API calls
-python main.py --dry-run "test task to check routing"
-
-# Verbose mode — shows provider selection, scores, latency
-python main.py --verbose "research task with full debug output"
-
-# Batch mode — process multiple inputs from file
-python main.py --batch inputs.txt --output ~/Downloads/results/
-
-# Status and health verification
-python main.py status      # show all configured providers + health
-python main.py verify      # test live connections to all providers
-```
-
-## ⚙️ CONFIGURATION
-
-| Variable | Default | Description |
-|---|---|---|
-| `GROQ_API_KEY` | — | Groq Cloud API key (primary fast text provider) |
-| `GEMINI_API_KEY` | — | Google AI Studio key (long-context and multimodal) |
-| `DEEPSEEK_API_KEY` | — | DeepSeek API key (code specialist tasks) |
-| `OPENAI_API_KEY` | — | OpenAI (Tier 1 fallback; used after Tier 0 exhausted) |
-| `ANTHROPIC_API_KEY` | — | Claude (final resort; only on explicit user request) |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Local Ollama endpoint (checked first always) |
-| `LOG_DIR` | `~/.claude/tcc-logs/` | Output log directory for all run records |
-| `TIMEOUT_S` | `30` | Per-operation timeout in seconds per provider |
-| `RETRY_COUNT` | `2` | Number of retry attempts before marking failed |
-| `CONFIDENCE_THRESHOLD` | `0.6` | Minimum confidence score to accept output (0.0-1.0) |
-| `COMPRESS_OUTPUT` | `true` | Apply caveman-compression to all outputs |
-| `LOG_LEVEL` | `INFO` | Logging verbosity: DEBUG / INFO / WARN / ERROR |
-| `LOCAL_FIRST` | `true` | Always try Ollama before any paid API call |
-| `AUTO_RETRY_ALT` | `true` | Automatically switch provider on persistent failure |
-| `OUTPUT_DIR` | `~/Downloads` | Default directory for all generated file outputs |
-
-## Validation and evidence
-
-No dedicated test or evaluation section was available in the current README.
-
-## 🔐 SECURITY CONSIDERATIONS
-
-## Limitations
-
-- Planned work is not presented as completed functionality.
-- Quantitative claims require reproducible evidence.
-- External provider behavior and pricing remain external dependencies.
-
-## 📚 RELATED REPOS IN THE HMZ AI SYSTEM
-
-| Repo | Role | Dependency |
-|---|---|---|
-| [G0DM0D3](https://github.com/hmzainjamil/G0DM0D3) | Multi-model racing + Liquid Response | Uses tier0-llm-router |
-| [mae-master-automation-engine](https://github.com/hmzainjamil/mae-master-automation-engine) | Goal decomposition + specialist swarm | Uses tcc, tier0 |
-| [tcc-task-command-center](https://github.com/hmzainjamil/tcc-task-command-center) | Parallel blast + queue + dashboard | Used by mae |
-| [tier0-llm-router](https://github.com/hmzainjamil/tier0-llm-router) | Cost-optimized routing ladder | Used by all |
-| [hermes-ai-system](https://github.com/hmzainjamil/hermes-ai-system) | Persistent agent + 80+ skills | Uses tier0, mcp |
-| [claude-ai-system-backup](https://github.com/hmzainjamil/claude-ai-system-backup) | System backup + restore | Backs up all |
-
-<div align="center">Built by <a href="https://github.com/hmzainjamil">HMZ</a> · Part of the <a href="https://github.com/hmzainjamil/claude-ai-system">HMZ Claude AI System</a> · Zero broken workflows</div>
+The repository has no dependency manifest, installation procedure, automated test suite, or license file. GitHub metadata reports no declared license. Do not infer permission to reuse or redistribute these scripts. Paths, model identifiers, provider behavior, and upstream Hermes interfaces can change.
 
 ## Maintainer
 
