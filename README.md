@@ -22,7 +22,7 @@ The scripts expect a separately installed `hermes` command. The upstream project
 
 Review each script and its target paths before use.
 
-- `hermes-activate` contacts Ollama at `localhost:11434`. It can download the configured model with `ollama pull`, sends a keep-alive request, creates `~/.hermes/.hermes_ready`, and passes any supplied task to the local Hermes CLI.
+- `hermes-activate` contacts Ollama at `localhost:11434`. It can download the hard-coded `qwen2.5:7b` model with `ollama pull`, sends a keep-alive request, creates `~/.hermes/.hermes_ready`, and passes any supplied task to the local Hermes CLI.
 - `hermes-autodetect` can modify files under the home directory, including `~/.hermes/config.yaml`, `~/.zshrc`, and `~/.claude/agents/hermes-nous-agent.md`.
 - `hermes-deactivate` uses broad `pkill -f` patterns. It can terminate matching Hermes chat or agent processes, then deletes the readiness sentinel.
 - `hermes-fc` sends prompts to the local Ollama-compatible API first. On failure, it sends the prompt to OpenRouter if the key is configured. The OpenRouter model and endpoint are specified in source. The script reads `GROQ_API_KEY` but does not use it.
